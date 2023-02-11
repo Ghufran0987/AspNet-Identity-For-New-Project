@@ -1,0 +1,141 @@
+Configuring Identity to your existing project is not hard thing. You must install some NuGet package and do some small configuration.
+
+First install these NuGet packages with Package Manager Console:
+
+PM> Install-Package Microsoft.AspNet.Identity.Owin 
+PM> Install-Package Microsoft.AspNet.Identity.EntityFramework
+PM> Install-Package Microsoft.Owin.Host.SystemWeb 
+Add a user class and with IdentityUser inheritance:
+
+public class AppUser : IdentityUser
+{
+    //add your custom properties which have not included in IdentityUser before
+    public string MyExtraProperty { get; set; }  
+}
+Do same thing for role:
+
+public class AppRole : IdentityRole
+{
+    public AppRole() : base() { }
+    public AppRole(string name) : base(name) { }
+    // extra properties here 
+}
+Change your DbContext parent from DbContext to IdentityDbContext<AppUser> like this:
+
+public class MyDbContext : IdentityDbContext<AppUser>
+{
+    // Other part of codes still same 
+    // You don't need to add AppUser and AppRole 
+    // since automatically added by inheriting form IdentityDbContext<AppUser>
+}
+If you use the same connection string and enabled migration, EF will create necessary tables for you.
+
+Optionally, you could extend UserManager to add your desired configuration and customization:
+
+public class AppUserManager : UserManager<AppUser>
+{
+    public AppUserManager(IUserStore<AppUser> store)
+        : base(store)
+    {
+    }
+
+    // this method is called by Owin therefore this is the best place to configure your User Manager
+    public static AppUserManager Create(
+        IdentityFactoryOptions<AppUserManager> options, IOwinContext context)
+    {
+        var manager = new AppUserManager(
+            new UserStore<AppUser>(context.Get<MyDbContext>()));
+
+        // optionally configure your manager
+        // ...
+
+        return manager;
+    }
+}
+Since Identity is based on OWIN you need to configure OWIN too:
+
+Add a class to App_Start folder (or anywhere else if you want). This class is used by OWIN. This will be your startup class.
+
+namespace MyAppNamespace
+{
+    public class IdentityConfig
+    {
+        public void Configuration(IAppBuilder app)
+        {
+            app.CreatePerOwinContext(() => new MyDbContext());
+            app.CreatePerOwinContext<AppUserManager>(AppUserManager.Create);
+            app.CreatePerOwinContext<RoleManager<AppRole>>((options, context) =>
+                new RoleManager<AppRole>(
+                    new RoleStore<AppRole>(context.Get<MyDbContext>())));
+
+            app.UseCookieAuthentication(new CookieAuthenticationOptions
+            {
+                AuthenticationType = DefaultAuthenticationTypes.ApplicationCookie,
+                LoginPath = new PathString("/Home/Login"),
+            });
+        }
+    }
+}
+Almost done just add this line of code to your web.config file so OWIN could find your startup class.
+
+<appSettings>
+    <!-- other setting here -->
+    <add key="owin:AppStartup" value="MyAppNamespace.IdentityConfig" />
+</appSettings>
+Now in entire project you could use Identity just like any new project had already installed by VS. Consider login action for example
+
+[HttpPost]
+public ActionResult Login(LoginViewModel login)
+{
+    if (ModelState.IsValid)
+    {
+        var userManager = HttpContext.GetOwinContext().GetUserManager<AppUserManager>();
+        var authManager = HttpContext.GetOwinContext().Authentication;
+
+        AppUser user = userManager.Find(login.UserName, login.Password);
+        if (user != null)
+        {
+            var ident = userManager.CreateIdentity(user, 
+                DefaultAuthenticationTypes.ApplicationCookie);
+            //use the instance that has been created. 
+            authManager.SignIn(
+                new AuthenticationProperties { IsPersistent = false }, ident);
+            return Redirect(login.ReturnUrl ?? Url.Action("Index", "Home"));
+        }
+    }
+    ModelState.AddModelError("", "Invalid username or password");
+    return View(login);
+}
+You could make roles and add to your users:
+
+public ActionResult CreateRole(string roleName)
+{
+    var roleManager=HttpContext.GetOwinContext().GetUserManager<RoleManager<AppRole>>();
+
+    if (!roleManager.RoleExists(roleName))
+        roleManager.Create(new AppRole(roleName));
+    // rest of code
+} 
+You could also add a role to a user, like this:
+
+UserManager.AddToRole(UserManager.FindByName("username").Id, "roleName");
+By using Authorize you could guard your actions or controllers:
+
+[Authorize]
+public ActionResult MySecretAction() {}
+or
+
+[Authorize(Roles = "Admin")]]
+public ActionResult MySecretAction() {}
+You can also install additional packages and configure them to meet your requirement like Microsoft.Owin.Security.Facebook or whichever you want.
+
+Note: Don't forget to add relevant namespaces to your files:
+
+using Microsoft.AspNet.Identity;
+using Microsoft.Owin.Security;
+using Microsoft.AspNet.Identity.Owin;
+using Microsoft.AspNet.Identity.EntityFramework;
+using Microsoft.Owin;
+using Microsoft.Owin.Security.Cookies;
+using Owin;
+You could also see my other answers like this and this for advanced use of Identity.
